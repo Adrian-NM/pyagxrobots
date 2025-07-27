@@ -1,4 +1,4 @@
-import pyagxrobots.UGVConfigMsg as UGVBaseMsg
+from . import UGVConfigMsg as UGVBaseMsg
 
 
 class MotionCommandMessage(object):

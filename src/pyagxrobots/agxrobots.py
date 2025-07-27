@@ -14,7 +14,7 @@ from can import Message
 from typing import ByteString, Set, Type
 from sqlite3.dbapi2 import Date
 
-import pyagxrobots.UGVConfigMsg as UGVBaseMsg
+from . import UGVConfigMsg as UGVBaseMsg
 
 # Type of current operating system
 # posix： Linux
