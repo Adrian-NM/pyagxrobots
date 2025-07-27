@@ -5,10 +5,10 @@ import os
 
 from wrapt.wrappers import transient_function_wrapper
 
-import pyagxrobots.UGVConfigMsg as UGVBaseMsg
-import pyagxrobots.agxrobots as agxrobots
-from pyagxrobots.agxbase import ActuatorStateMessageV1, GetRobotStae
-from pyagxrobots.agxbase import ActuatorStateMessageV2
+from . import UGVConfigMsg as UGVBaseMsg
+from . import agxrobots
+from .agxbase import ActuatorStateMessageV1, GetRobotStae
+from .agxbase import ActuatorStateMessageV2
 
 
 class BunkerBase(GetRobotStae):
@@ -102,6 +102,14 @@ class RangerBase(GetRobotStae):
             self.RangerActuator2=ActuatorStateMessageV2(motro_id=2)
             self.RangerActuator3=ActuatorStateMessageV2(motro_id=3)
             self.RangerActuator4=ActuatorStateMessageV2(motro_id=4)  
+
+    def shutdown(self):
+        """将关闭指令传递给底层的UGV对象"""
+        if hasattr(self, 'rangerbase') and self.rangerbase is not None:
+            self.rangerbase.shutdown()
+
+    def __del__(self):
+        self.shutdown()  
 
     def  SetMotionCommand(self,linear_vel=0.0,lateral_vel=0.0,angular_vel=0.0,steer_angle=0.0):
         

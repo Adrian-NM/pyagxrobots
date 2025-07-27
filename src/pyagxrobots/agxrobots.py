@@ -356,154 +356,92 @@ class CanMsgsGet:
 
 class DeviceCan:
     """
-
+    重构后的DeviceCan类，解决了资源泄漏、竞态条件和NoneType错误。
     """
-
     def __init__(self, bustype=None, channel=None, bitrate=None):
         UGVBaseMsg._init()
-        if bitrate is None:
-            self.bitrate = 500000
-        else:
-            self.bitrate = bitrate
+        # 保持向后兼容性，同时设置合理默认值
+        self.bustype = bustype if bustype is not None else "socketcan"
+        self.channel = channel if channel is not None else "can0"
+        self.bitrate = bitrate if bitrate is not None else 500000
+        
+        self.bus = None
+        self.notifier = None
+        self.base_verson = 0
 
-        if bustype is None:
-            self.bustype = "socketcan"
-        else:
-            self.bustype = bustype
+        try:
+            # 1. 创建并打开总线
+            self.bus = can.interface.Bus(channel=self.channel, bustype=self.bustype, bitrate=self.bitrate)
+            
+            # 2. 获取底盘协议版本
+            self.base_verson = self._get_base_version_safely()
+            if self.base_verson == 0:
+                raise can.CanError(f"错误：在CAN总线 {self.channel} 上超时，未能检测到AgileX UGV。请检查物理连接和底盘电源。")
 
-        if channel is None:
-            self.channel = "can0"
-        else:
-            default_channel = channel
-            self.channel = default_channel
-        self.base_verson = self.GetBaseVersion()
+            # 3. 启动后台监听线程
+            # can.Notifier会自己管理一个后台线程，我们只需要在最后停止它
+            self.notifier = can.Notifier(self.bus, [self.ListenerMessage])
+            
+        except Exception as e:
+            print(f"初始化DeviceCan失败: {e}")
+            self.shutdown() # 如果初始化过程中任何一步失败，确保资源被清理
+            raise  # 重新抛出异常，让上层知道初始化失败
 
-        # with self.canport as server:
-        with can.interface.Bus(bustype=self.bustype,
-                               channel=self.channel,
-                               bitrate=self.bitrate) as client:
-            # stop_event = threading.Event()
-            t_receive = threading.Thread(target=self.EnableAsynsCan)
-            t_receive.start()
-            # self.EnableAsynsCan(client)
-
-            try:
-                if self.base_verson==1:
-                    pass
-                elif self.base_verson==2:
-                    # while (UGVBaseMsg.GetLen() < UGVBaseMsg.CanMsgLen.CAN_MSG_LEN):
-                    #     self.msg = Message(
-                    #         arbitration_id=UGVBaseMsg.CanIDV2.VERSION_REQUEST_ID,
-                    #         data=[0x01],
-                    #         is_extended_id=False)
-                    #     self.CanSend(self.msg)
-                        time.sleep(0.1)
-
-            except (KeyboardInterrupt, SystemExit):
-                pass
-            # stop_event.set()
-            time.sleep(0.5)
-
-    def GetBaseVersion(self):
-        self.base_verson=0
-        self.canport = can.interface.Bus(bustype=self.bustype,
-                                         channel=self.channel,
-                                         bitrate=self.bitrate)
-        while (self.base_verson == 0):
-            msg = self.canport.recv(0.01)
-            if(msg.arbitration_id == 0x151):
-                self.base_verson = 1
-                return self.base_verson
-            elif(msg.arbitration_id == 0x241):
-                self.base_verson = 2
-                return self.base_verson
-            else:
-                self.base_verson = 0
-                
-
-    async def CanReceive(self, bus, stop_event):
-        """The loop for receiving."""
-        print("Start receiving messages")
-        SlectMsg = CanMsgsGet()
-        while not stop_event.is_set():
-
-            self.rx_msg = await bus.recv(0.002)
-            if self.rx_msg is not None:
-                if(self.base_verson == 1):
-                    SlectMsg.CanMsgsProcessV2(self.rx_msg)
-                    # print("rx: {}".format(self.rx_msg))
-                elif(self.base_verson == 2):
-                    SlectMsg.CanMsgsProcessV2(self.rx_msg)
-                    # print("rx: {}".format(self.rx_msg))
-
-        await bus.recv()
-        print("Stopped receiving messages")
-        if stop_event.is_set() == False:
-            stop_event.set()
-
-    def CanGet(self):
-        self.canport = can.ThreadSafeBus(interface=self.bustype,
-                                         channel=self.channel,
-                                         bitrate=self.bitrate)
-
-        msg = self.canport.recv(0.002)
-        print(msg)
-        return msg
-
-    def EnableAsynsCan(self):
-
-        LOOP = asyncio.new_event_loop()
-        asyncio.set_event_loop(LOOP)
-        # Run until main coroutine finishes
-        LOOP.run_until_complete(self.AsynsCan())
+    def _get_base_version_safely(self):
+        """
+        健壮的版本获取函数。
+        循环接收消息直到找到版本信息或超时。
+        """
+        print("正在检测UGV协议版本...")
+        start_time = time.time()
+        timeout = 3.0  # 设置3秒超时
+        
+        while time.time() - start_time < timeout:
+            msg = self.bus.recv(0.1) # 每次等待100ms
+            if msg is not None: # 关键：检查msg是否为None
+                if msg.arbitration_id == UGVBaseMsg.CanIDV1.SYSTEM_STATE_ID:
+                    print("检测到V1协议 (ID 0x151)")
+                    return 1
+                # 注意：根据官方代码，V2的RC_STATE_ID是0x241，这可能是一个周期性发送的稳定信号
+                elif msg.arbitration_id == UGVBaseMsg.CanIDV2.RC_STATE_ID:
+                    print("检测到V2协议 (ID 0x241)")
+                    return 2
+        
+        return 0 # 返回0表示失败
 
     def ListenerMessage(self, msg):
+        """消息监听回调函数，用于解析和存储车辆状态"""
         SlectMsg = CanMsgsGet()
-        if (self.base_verson == 1):
+        if self.base_verson == 1:
             SlectMsg.CanMsgsProcessV1(msg)
-        elif (self.base_verson == 2):
-            SlectMsg.CanMsgsProcessV2(msg)
-
-    async def AsynsCan(self):
-        bus = can.Bus(interface=self.bustype,
-                      channel=self.channel,
-                      bitrate=self.bitrate)
-
-        reader = can.BufferedReader()
-        logger = can.Logger('logfile.asc')
-        listeners = [
-            self.ListenerMessage,
-            reader,  # AsyncBufferedReader() listener
-            logger  # Regular Listener object
-        ]
-        loop = asyncio.get_event_loop()
-        notifier = can.Notifier(bus, listeners, loop=loop)
-        while 1:
-            msg = reader.get_message()
-            await asyncio.sleep(0.2)
-
-        notifier.stop()
-
-    def CanDataUpdate(self):
-        msg = self.CanGet()
-        SlectMsg = CanMsgsGet()
-        if msg is None:
-            print('time occerred,no message')
-        elif(self.base_verson == 1):
-            SlectMsg.CanMsgsProcessV1(msg)
-        elif(self.base_verson == 2):
+        elif self.base_verson == 2:
             SlectMsg.CanMsgsProcessV2(msg)
 
     def CanSend(self, msg):
+        """高效地发送CAN消息"""
+        if self.bus is None:
+            # print("错误：CAN总线未打开，无法发送消息。") # 避免过多打印
+            return
+        try:
+            self.bus.send(msg)
+        except can.CanError as e:
+            print(f"消息发送失败: {e}")
 
-        self.canport = can.ThreadSafeBus(interface=self.bustype,
-                                         channel=self.channel,
-                                         bitrate=self.bitrate)
-        with self.canport as bus:
-            try:
-                bus.send(msg)
-            except can.CanError:
-                print("Message NOT sent")
+    def shutdown(self):
+        """
+        优雅地关闭CAN总线和后台线程，解决资源泄漏问题。
+        """
+        if self.notifier:
+            self.notifier.stop()
+            self.notifier = None
+        if self.bus:
+            self.bus.shutdown()
+            self.bus = None
+            # print("DeviceCan已关闭。") # 可选的调试信息
+
+    def __del__(self):
+        """对象销毁时的安全保障"""
+        self.shutdown()
 
 
 class UGV:
@@ -540,6 +478,14 @@ class UGV:
         self.device = DeviceCan(**args_dict)
         self.base_version = self.device.base_verson
     UGVBaseMsg._init()
+
+    def shutdown(self):
+        """将关闭指令传递给底层的CAN设备"""
+        if hasattr(self, 'device') and self.device is not None:
+            self.device.shutdown()
+
+    def __del__(self):
+        self.shutdown()
 
     def SendMsg(self, msg):
         self.device.CanSend(msg)

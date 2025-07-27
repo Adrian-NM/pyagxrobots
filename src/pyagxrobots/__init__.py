@@ -1,9 +1,9 @@
-from pyagxrobots.agxrobots import UGV
-from pyagxrobots.agxrobots import CanMsgsGet
-from pyagxrobots.agxrobots import DeviceCan
-from pyagxrobots import UGVConfigMsg
-from pyagxrobots import pysdkugv
-from pyagxrobots import agxbase
+from .agxrobots import UGV
+from .agxrobots import CanMsgsGet
+from .agxrobots import DeviceCan
+from . import UGVConfigMsg
+from . import pysdkugv
+from . import agxbase
 __all__ = [
     'UGV',
     'CanMsgsGet',
@@ -12,7 +12,3 @@ __all__ = [
     'pysdkugv',
     'agxbase',
 ]
-
-
-
-
